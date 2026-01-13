@@ -227,14 +227,16 @@ class NatsMessagingAdapter(IMessagingPort):
             )
             return
 
-        response_message = Message(
-            topic=original_message.reply_to,
-            payload=response,
-            source_voltran_id=self._voltran_id,
-            correlation_id=original_message.correlation_id,
+        response_payload = self._inject_correlation_id(
+            response, original_message.correlation_id
         )
+        await self.publish(original_message.reply_to, response_payload)
 
-        await self.publish(original_message.reply_to, response_message.payload)
+    def _inject_correlation_id(self, payload: Any, correlation_id: str) -> Any:
+        """Ensure correlation_id is included in dict payloads."""
+        if correlation_id and isinstance(payload, dict) and "correlation_id" not in payload:
+            return {**payload, "correlation_id": correlation_id}
+        return payload
 
     async def _setup_response_handler(self) -> None:
         """Setup handler for responses."""

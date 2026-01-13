@@ -322,6 +322,8 @@ def require_permission(
     """
 
     def decorator(func: F) -> F:
+        sig = inspect.signature(func)
+
         @functools.wraps(func)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             # Get authorization service from context
@@ -337,7 +339,8 @@ def require_permission(
                 return await func(self, *args, **kwargs)
             
             # Get subject_id from kwargs
-            subject_id = kwargs.get(subject_id_key)
+            bound = sig.bind_partial(self, *args, **kwargs)
+            subject_id = bound.arguments.get(subject_id_key) or kwargs.get(subject_id_key)
             if not subject_id:
                 raise PermissionDeniedError(
                     f"Subject ID not provided (key: {subject_id_key})",
@@ -389,6 +392,8 @@ def require_role(
     """
 
     def decorator(func: F) -> F:
+        sig = inspect.signature(func)
+
         @functools.wraps(func)
         async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             # Get authorization service from context
@@ -404,7 +409,8 @@ def require_role(
                 return await func(self, *args, **kwargs)
             
             # Get subject_id from kwargs
-            subject_id = kwargs.get(subject_id_key)
+            bound = sig.bind_partial(self, *args, **kwargs)
+            subject_id = bound.arguments.get(subject_id_key) or kwargs.get(subject_id_key)
             if not subject_id:
                 raise PermissionDeniedError(
                     f"Subject ID not provided (key: {subject_id_key})",

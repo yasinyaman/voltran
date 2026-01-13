@@ -66,6 +66,7 @@ async def test_nats_respond_uses_reply_to_subject() -> None:
         payload={"action": "ping"},
         source_voltran_id="peer",
         reply_to="INBOX.999",
+        correlation_id="corr-123",
     )
 
     await adapter.respond(original, {"ok": True})
@@ -74,4 +75,5 @@ async def test_nats_respond_uses_reply_to_subject() -> None:
     subject, data = fake_nc.published[0]
     assert subject == "INBOX.999"
     decoded = json.loads(data.decode("utf-8"))
-    assert decoded["payload"] == {"ok": True}
+    assert decoded["payload"]["ok"] is True
+    assert decoded["payload"]["correlation_id"] == "corr-123"

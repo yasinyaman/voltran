@@ -31,3 +31,10 @@ async def test_require_permission_allows_when_auth_disabled() -> None:
 async def test_require_role_allows_when_auth_disabled() -> None:
     module = _Module()
     assert await module.admin() == "ok"
+
+
+@pytest.mark.asyncio
+async def test_subject_id_positional_is_allowed() -> None:
+    module = _Module()
+    assert await module.read("user-2") == "ok"
+    assert await module.admin("user-2") == "ok"

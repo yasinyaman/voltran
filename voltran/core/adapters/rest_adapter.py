@@ -269,7 +269,10 @@ class RestMessagingAdapter(IMessagingPort):
         # For REST, responses are returned directly from the request handler
         # This method is for compatibility with the interface
         if original_message.correlation_id:
-            self._pending_responses[original_message.correlation_id] = response
+            response_payload = self._inject_correlation_id(
+                response, original_message.correlation_id
+            )
+            self._pending_responses[original_message.correlation_id] = response_payload
 
     # === HTTP Server Routes ===
 
@@ -359,20 +362,38 @@ class RestMessagingAdapter(IMessagingPort):
                     try:
                         handler_result = await handler(message)
                         if handler_result is not None and response_payload is None:
-                            response_payload = handler_result
+                            response_payload = self._inject_correlation_id(
+                                handler_result, message.correlation_id
+                            )
                         pending = self._pending_responses.pop(
                             message.correlation_id, None
                         )
                         if pending is not None:
-                            response_payload = pending
+                            response_payload = self._inject_correlation_id(
+                                pending, message.correlation_id
+                            )
                             break
                     except Exception as e:
                         logger.error("request_handler_error", error=str(e))
+                        return web.json_response(
+                            {
+                                "success": False,
+                                "error": str(e),
+                                "correlation_id": message.correlation_id,
+                            },
+                            status=500,
+                        )
             
             # Generic request handling
-            if response_payload is None and message.payload.get("action") == "get_modules":
+            if (
+                response_payload is None
+                and isinstance(message.payload, dict)
+                and message.payload.get("action") == "get_modules"
+            ):
                 # Return modules (to be implemented with discovery integration)
-                response_payload = {"modules": []}
+                response_payload = self._inject_correlation_id(
+                    {"modules": []}, message.correlation_id
+                )
             
             return web.json_response({
                 "success": True,
@@ -386,6 +407,12 @@ class RestMessagingAdapter(IMessagingPort):
                 {"success": False, "error": str(e)},
                 status=500,
             )
+
+    def _inject_correlation_id(self, payload: Any, correlation_id: str) -> Any:
+        """Ensure correlation_id is included in dict payloads."""
+        if correlation_id and isinstance(payload, dict) and "correlation_id" not in payload:
+            return {**payload, "correlation_id": correlation_id}
+        return payload
 
     async def _handle_webhook(self, request: Any) -> Any:
         """Handle incoming webhook (pub/sub message)."""
@@ -568,5 +595,4 @@ class RestMessagingAdapter(IMessagingPort):
             correlation_id=data.get("correlation_id", ""),
             reply_to=data.get("reply_to"),
         )
-
 

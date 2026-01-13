@@ -179,9 +179,12 @@ class GrpcMessagingAdapter(IMessagingPort):
             )
             return
 
+        response_payload = self._inject_correlation_id(
+            response, original_message.correlation_id
+        )
         response_message = Message(
             topic=original_message.reply_to,
-            payload=response,
+            payload=response_payload,
             source_voltran_id=self._voltran_id,
             correlation_id=original_message.correlation_id,
         )
@@ -226,3 +229,9 @@ class GrpcMessagingAdapter(IMessagingPort):
         if pattern.endswith(".*"):
             return topic.startswith(pattern[:-2])
         return False
+
+    def _inject_correlation_id(self, payload: Any, correlation_id: str) -> Any:
+        """Ensure correlation_id is included in dict payloads."""
+        if correlation_id and isinstance(payload, dict) and "correlation_id" not in payload:
+            return {**payload, "correlation_id": correlation_id}
+        return payload
