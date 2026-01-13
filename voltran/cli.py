@@ -1,7 +1,6 @@
 """Voltran CLI - command line interface for managing Voltran nodes."""
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -10,9 +9,46 @@ import click
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.syntax import Syntax
 
 console = Console()
+
+
+def _normalize_rest_url(endpoint: str) -> str:
+    """Normalize a REST endpoint into a base URL."""
+    endpoint = endpoint.strip().rstrip("/")
+    if endpoint.startswith(("http://", "https://")):
+        base = endpoint
+    else:
+        base = f"http://{endpoint}"
+    if not base.endswith("/api/v1"):
+        base = f"{base}/api/v1"
+    return base
+
+
+async def _request_json(
+    method: str,
+    url: str,
+    payload: Optional[dict] = None,
+    timeout: float = 5.0,
+) -> tuple[int, dict]:
+    """Send an HTTP request and return status + JSON payload."""
+    import aiohttp
+
+    timeout_cfg = aiohttp.ClientTimeout(total=timeout)
+    async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
+        request_kwargs = {"json": payload} if payload is not None else {}
+        async with session.request(method, url, **request_kwargs) as response:
+            try:
+                data = await response.json()
+            except Exception:
+                data = {"error": await response.text()}
+            return response.status, data
+
+
+def _print_rest_error(status: int, payload: dict) -> None:
+    """Render REST error output."""
+    message = payload.get("error", "Unknown error")
+    console.print(f"[red]REST hata:[/red] {message} (HTTP {status})")
 
 
 # === Project Templates ===
@@ -212,6 +248,25 @@ await voltran.create_federation("my-federation")
 # Uye node (baska makinede)
 await voltran.join_federation(leader_id)
 ```
+
+## CLI
+
+```bash
+voltran init {project_name}
+voltran start --name {project_name}-node --rest --rest-port 8080
+voltran status -e http://localhost:8080
+```
+
+## Management API
+
+REST aktifken asagidaki endpoint'ler kullanilabilir:
+
+- GET /api/v1/health
+- GET /api/v1/info
+- GET /api/v1/modules
+- GET /api/v1/modules/{module_id}
+- POST /api/v1/clusters
+- POST /api/v1/clusters/{cluster_id}/fuse
 
 ## Lisans
 
@@ -589,21 +644,38 @@ def join(leader: str, name: str, host: str, port: int, nats: str) -> None:
 
 
 @main.command()
-@click.option("--endpoint", "-e", default="localhost:50051", help="Node endpoint")
-def status(endpoint: str) -> None:
-    """Check status of a Voltran node."""
+@click.option("--endpoint", "-e", default="http://localhost:8080", help="REST API endpoint")
+@click.option("--timeout", default=5.0, show_default=True, type=float, help="Request timeout (seconds)")
+@click.option("--json", "json_output", is_flag=True, help="JSON output")
+def status(endpoint: str, timeout: float, json_output: bool) -> None:
+    """Check status of a Voltran node via REST."""
     console.print(f"[bold]Checking status of:[/bold] {endpoint}")
-    
-    # For now, just show example output
-    table = Table(title="Node Status")
-    table.add_column("Property", style="cyan")
-    table.add_column("Value", style="green")
-    
-    table.add_row("Endpoint", endpoint)
-    table.add_row("Status", "Unknown (remote check not implemented)")
-    table.add_row("Note", "Use health_check() on a running instance")
-    
-    console.print(table)
+
+    async def run() -> None:
+        base = _normalize_rest_url(endpoint)
+        status_code, payload = await _request_json(
+            "GET", f"{base}/health", timeout=timeout
+        )
+        if status_code != 200:
+            _print_rest_error(status_code, payload)
+            return
+
+        if json_output:
+            console.print_json(data=payload)
+            return
+
+        table = Table(title="Node Status")
+        table.add_column("Property", style="cyan")
+        table.add_column("Value", style="green")
+
+        table.add_row("Endpoint", endpoint)
+        table.add_row("Status", payload.get("status", "unknown"))
+        table.add_row("Voltran ID", payload.get("voltran_id", "-"))
+        table.add_row("Timestamp", payload.get("timestamp", "-"))
+
+        console.print(table)
+
+    asyncio.run(run())
 
 
 @main.command()
@@ -636,19 +708,81 @@ def module() -> None:
 
 
 @module.command("list")
-@click.option("--format", "-f", type=click.Choice(["table", "json"]), default="table")
-def list_modules(format: str) -> None:
-    """List registered modules."""
-    console.print("[yellow]Note: This command requires a running Voltran instance.[/yellow]")
-    console.print("Use Voltran.list_modules() programmatically.")
+@click.option("--endpoint", "-e", default="http://localhost:8080", help="REST API endpoint")
+@click.option("--timeout", default=5.0, show_default=True, type=float, help="Request timeout (seconds)")
+@click.option("--json", "json_output", is_flag=True, help="JSON output")
+def list_modules(endpoint: str, timeout: float, json_output: bool) -> None:
+    """List registered modules via REST."""
+    async def run() -> None:
+        base = _normalize_rest_url(endpoint)
+        status_code, payload = await _request_json(
+            "GET", f"{base}/modules", timeout=timeout
+        )
+        if status_code != 200:
+            _print_rest_error(status_code, payload)
+            return
+
+        modules = payload.get("modules", [])
+        if json_output:
+            console.print_json(data=modules)
+            return
+
+        table = Table(title="Modules")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name", style="white")
+        table.add_column("Version", style="green")
+        table.add_column("Health", style="yellow")
+
+        for module in modules:
+            table.add_row(
+                module.get("id", ""),
+                module.get("name", ""),
+                module.get("version", ""),
+                module.get("health", ""),
+            )
+
+        console.print(table)
+
+    asyncio.run(run())
 
 
 @module.command("info")
 @click.argument("module_id")
-def module_info(module_id: str) -> None:
-    """Show module information."""
-    console.print(f"[yellow]Looking up module:[/yellow] {module_id}")
-    console.print("[yellow]Note: This command requires a running Voltran instance.[/yellow]")
+@click.option("--endpoint", "-e", default="http://localhost:8080", help="REST API endpoint")
+@click.option("--timeout", default=5.0, show_default=True, type=float, help="Request timeout (seconds)")
+@click.option("--json", "json_output", is_flag=True, help="JSON output")
+def module_info(module_id: str, endpoint: str, timeout: float, json_output: bool) -> None:
+    """Show module information via REST."""
+    async def run() -> None:
+        base = _normalize_rest_url(endpoint)
+        status_code, payload = await _request_json(
+            "GET", f"{base}/modules/{module_id}", timeout=timeout
+        )
+        if status_code == 404:
+            console.print(f"[red]Module bulunamadi:[/red] {module_id}")
+            return
+        if status_code != 200:
+            _print_rest_error(status_code, payload)
+            return
+
+        if json_output:
+            console.print_json(data=payload)
+            return
+
+        table = Table(title="Module Info")
+        table.add_column("Field", style="cyan")
+        table.add_column("Value", style="green")
+
+        table.add_row("ID", payload.get("id", ""))
+        table.add_row("Name", payload.get("name", ""))
+        table.add_row("Version", payload.get("version", ""))
+        table.add_row("Health", payload.get("health", ""))
+        table.add_row("Cluster ID", payload.get("cluster_id", "") or "-")
+        table.add_row("Voltran ID", payload.get("voltran_id", "") or "-")
+
+        console.print(table)
+
+    asyncio.run(run())
 
 
 @main.group()
@@ -659,21 +793,64 @@ def cluster() -> None:
 
 @cluster.command("create")
 @click.argument("name")
-def create_cluster(name: str) -> None:
-    """Create a new cluster."""
-    console.print(f"[yellow]Creating cluster:[/yellow] {name}")
-    console.print("[yellow]Note: This command requires a running Voltran instance.[/yellow]")
+@click.option("--endpoint", "-e", default="http://localhost:8080", help="REST API endpoint")
+@click.option("--timeout", default=5.0, show_default=True, type=float, help="Request timeout (seconds)")
+@click.option("--json", "json_output", is_flag=True, help="JSON output")
+def create_cluster(name: str, endpoint: str, timeout: float, json_output: bool) -> None:
+    """Create a new cluster via REST."""
+    async def run() -> None:
+        base = _normalize_rest_url(endpoint)
+        status_code, payload = await _request_json(
+            "POST", f"{base}/clusters", {"name": name}, timeout=timeout
+        )
+        if status_code != 200:
+            _print_rest_error(status_code, payload)
+            return
+
+        if json_output:
+            console.print_json(data=payload)
+            return
+
+        console.print(
+            f"[green]Cluster olusturuldu:[/green] {payload.get('id', '-')}"
+        )
+
+    asyncio.run(run())
 
 
 @cluster.command("fuse")
 @click.argument("cluster_id")
 @click.option("--name", "-n", required=True, help="Virtual module name")
-def fuse_cluster(cluster_id: str, name: str) -> None:
-    """Fuse a cluster into a virtual module."""
-    console.print(f"[yellow]Fusing cluster:[/yellow] {cluster_id} -> {name}")
-    console.print("[yellow]Note: This command requires a running Voltran instance.[/yellow]")
+@click.option("--endpoint", "-e", default="http://localhost:8080", help="REST API endpoint")
+@click.option("--timeout", default=5.0, show_default=True, type=float, help="Request timeout (seconds)")
+@click.option("--json", "json_output", is_flag=True, help="JSON output")
+def fuse_cluster(
+    cluster_id: str,
+    name: str,
+    endpoint: str,
+    timeout: float,
+    json_output: bool,
+) -> None:
+    """Fuse a cluster into a virtual module via REST."""
+    async def run() -> None:
+        base = _normalize_rest_url(endpoint)
+        status_code, payload = await _request_json(
+            "POST", f"{base}/clusters/{cluster_id}/fuse", {"name": name}, timeout=timeout
+        )
+        if status_code != 200:
+            _print_rest_error(status_code, payload)
+            return
+
+        if json_output:
+            console.print_json(data=payload)
+            return
+
+        console.print(
+            f"[green]Virtual modul olusturuldu:[/green] {payload.get('id', '-')}"
+        )
+
+    asyncio.run(run())
 
 
 if __name__ == "__main__":
     main()
-

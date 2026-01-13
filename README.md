@@ -9,6 +9,7 @@ Hexagonal Modular Federation System for modular services and federated nodes.
 - Messaging via gRPC, NATS, or REST
 - Cluster fusion and virtual nodes
 - Built-in monitoring, logging, and authorization
+- CLI management over REST (status, module list/info, cluster create/fuse)
 
 ## Requirements
 
@@ -88,6 +89,35 @@ await voltran.join_federation(leader_id)
 voltran init my-project
 voltran start --name my-node --host 0.0.0.0 --port 50051
 ```
+
+REST-enabled node management:
+
+```bash
+# Start with REST enabled
+voltran start --rest --rest-port 8080
+
+# Health/status
+voltran status -e http://localhost:8080
+
+# Modules
+voltran module list -e http://localhost:8080
+voltran module info <module_id> -e http://localhost:8080
+
+# Clusters
+voltran cluster create my-cluster -e http://localhost:8080
+voltran cluster fuse <cluster_id> --name my-virtual -e http://localhost:8080
+```
+
+## Management API
+
+When `--rest` is enabled, Voltran exposes management endpoints under `/api/v1`:
+
+- `GET /api/v1/health`
+- `GET /api/v1/info`
+- `GET /api/v1/modules`
+- `GET /api/v1/modules/{module_id}`
+- `POST /api/v1/clusters`
+- `POST /api/v1/clusters/{cluster_id}/fuse`
 
 ## Tests
 

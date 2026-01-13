@@ -200,6 +200,10 @@ class Voltran:
             voltran_id=self._node.id,
             messaging=self._messaging,
         )
+
+        if isinstance(self._messaging, RestMessagingAdapter):
+            self._messaging.set_registry(self._discovery)
+            self._messaging.set_cluster_port(self._discovery)
         
         # Create federation mesh
         self._federation = FederationMesh(

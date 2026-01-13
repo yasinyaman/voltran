@@ -34,6 +34,8 @@ class RestMessagingAdapter(IMessagingPort):
         port: int = 8080,
         voltran_id: str = "",
         base_path: str = "/api/v1",
+        registry: Optional[Any] = None,  # IModuleRegistryPort
+        cluster_port: Optional[Any] = None,  # IClusterPort
     ):
         """
         Initialize REST adapter.
@@ -68,6 +70,18 @@ class RestMessagingAdapter(IMessagingPort):
         
         # Known peers (voltran_id -> base_url)
         self._peers: dict[str, str] = {}
+
+        # Optional registry/cluster ports for REST management endpoints
+        self._registry = registry
+        self._cluster_port = cluster_port
+
+    def set_registry(self, registry: Any) -> None:
+        """Set module registry port for REST management endpoints."""
+        self._registry = registry
+
+    def set_cluster_port(self, cluster_port: Any) -> None:
+        """Set cluster port for REST management endpoints."""
+        self._cluster_port = cluster_port
 
     @property
     def voltran_id(self) -> str:
@@ -315,6 +329,20 @@ class RestMessagingAdapter(IMessagingPort):
             f"{self._base_path}/modules",
             self._handle_list_modules,
         )
+        self._app.router.add_get(
+            f"{self._base_path}/modules/{{module_id}}",
+            self._handle_get_module,
+        )
+
+        # Cluster endpoints
+        self._app.router.add_post(
+            f"{self._base_path}/clusters",
+            self._handle_create_cluster,
+        )
+        self._app.router.add_post(
+            f"{self._base_path}/clusters/{{cluster_id}}/fuse",
+            self._handle_fuse_cluster,
+        )
 
         # Register peer endpoint
         self._app.router.add_post(
@@ -368,10 +396,11 @@ class RestMessagingAdapter(IMessagingPort):
                         pending = self._pending_responses.pop(
                             message.correlation_id, None
                         )
-                        if pending is not None:
+                        if pending is not None and response_payload is None:
                             response_payload = self._inject_correlation_id(
                                 pending, message.correlation_id
                             )
+                        if response_payload is not None:
                             break
                     except Exception as e:
                         logger.error("request_handler_error", error=str(e))
@@ -476,12 +505,148 @@ class RestMessagingAdapter(IMessagingPort):
     async def _handle_list_modules(self, request: Any) -> Any:
         """Handle list modules request."""
         from aiohttp import web
-        
-        # This should be integrated with discovery service
-        return web.json_response({
-            "voltran_id": self._voltran_id,
-            "modules": [],  # To be populated by discovery integration
-        })
+
+        if not self._registry:
+            return web.json_response(
+                {"success": False, "error": "Module registry not configured"},
+                status=501,
+            )
+
+        try:
+            modules = await self._registry.get_all()
+            return web.json_response({
+                "voltran_id": self._voltran_id,
+                "modules": [self._module_to_dict(m) for m in modules],
+            })
+        except Exception as e:
+            logger.error("module_list_error", error=str(e))
+            return web.json_response(
+                {"success": False, "error": str(e)},
+                status=500,
+            )
+
+    async def _handle_get_module(self, request: Any) -> Any:
+        """Handle get module request."""
+        from aiohttp import web
+
+        if not self._registry:
+            return web.json_response(
+                {"success": False, "error": "Module registry not configured"},
+                status=501,
+            )
+
+        module_id = request.match_info.get("module_id", "")
+        try:
+            module = await self._registry.get(module_id)
+            if not module:
+                return web.json_response(
+                    {"success": False, "error": "Module not found"},
+                    status=404,
+                )
+            return web.json_response(self._module_to_dict(module))
+        except Exception as e:
+            logger.error("module_get_error", error=str(e), module_id=module_id)
+            return web.json_response(
+                {"success": False, "error": str(e)},
+                status=500,
+            )
+
+    async def _handle_create_cluster(self, request: Any) -> Any:
+        """Handle create cluster request."""
+        from aiohttp import web
+
+        if not self._cluster_port:
+            return web.json_response(
+                {"success": False, "error": "Cluster port not configured"},
+                status=501,
+            )
+
+        data = await request.json()
+        name = data.get("name", "").strip() if isinstance(data, dict) else ""
+        if not name:
+            return web.json_response(
+                {"success": False, "error": "Missing cluster name"},
+                status=400,
+            )
+
+        try:
+            cluster = await self._cluster_port.create_cluster(name)
+            return web.json_response({
+                "id": cluster.id,
+                "name": cluster.name,
+                "voltran_id": cluster.voltran_id,
+            })
+        except Exception as e:
+            logger.error("cluster_create_error", error=str(e))
+            return web.json_response(
+                {"success": False, "error": str(e)},
+                status=500,
+            )
+
+    async def _handle_fuse_cluster(self, request: Any) -> Any:
+        """Handle fuse cluster request."""
+        from aiohttp import web
+
+        if not self._cluster_port:
+            return web.json_response(
+                {"success": False, "error": "Cluster port not configured"},
+                status=501,
+            )
+
+        cluster_id = request.match_info.get("cluster_id", "")
+        data = await request.json()
+        name = data.get("name", "").strip() if isinstance(data, dict) else ""
+        if not name:
+            return web.json_response(
+                {"success": False, "error": "Missing virtual module name"},
+                status=400,
+            )
+
+        try:
+            virtual_module = await self._cluster_port.fuse_cluster(cluster_id, name)
+            return web.json_response(self._module_to_dict(virtual_module))
+        except ValueError as e:
+            return web.json_response(
+                {"success": False, "error": str(e)},
+                status=404,
+            )
+        except Exception as e:
+            logger.error("cluster_fuse_error", error=str(e), cluster_id=cluster_id)
+            return web.json_response(
+                {"success": False, "error": str(e)},
+                status=500,
+            )
+
+    def _module_to_dict(self, module: Any) -> dict:
+        """Convert ModuleDescriptor to JSON-serializable dict."""
+        return {
+            "id": getattr(module, "id", ""),
+            "name": getattr(module, "name", ""),
+            "version": getattr(module, "version", ""),
+            "health": getattr(getattr(module, "health", None), "value", None),
+            "cluster_id": getattr(module, "cluster_id", None),
+            "voltran_id": getattr(module, "voltran_id", None),
+            "capabilities": [
+                {
+                    "name": c.name,
+                    "contract_id": c.contract_id,
+                    "direction": c.direction.value,
+                    "protocol": c.protocol,
+                    "metadata": c.metadata,
+                }
+                for c in getattr(module, "capabilities", [])
+            ],
+            "endpoints": [
+                {
+                    "host": e.host,
+                    "port": e.port,
+                    "protocol": e.protocol,
+                    "path": e.path,
+                }
+                for e in getattr(module, "endpoints", [])
+            ],
+            "metadata": getattr(module, "metadata", {}),
+        }
 
     async def _handle_register_peer(self, request: Any) -> Any:
         """Handle peer registration."""
@@ -562,7 +727,7 @@ class RestMessagingAdapter(IMessagingPort):
 
         # Wildcard matching (simple prefix)
         for pattern, handlers in self._topic_handlers.items():
-            if pattern.endswith(".*") and topic.startswith(pattern[:-2]):
+            if pattern.endswith(".*") and topic.startswith(pattern[:-1]):
                 for handler in handlers:
                     try:
                         await handler(message)
@@ -595,4 +760,3 @@ class RestMessagingAdapter(IMessagingPort):
             correlation_id=data.get("correlation_id", ""),
             reply_to=data.get("reply_to"),
         )
-

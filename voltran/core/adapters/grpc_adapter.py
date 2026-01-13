@@ -227,7 +227,7 @@ class GrpcMessagingAdapter(IMessagingPort):
         if pattern == topic:
             return True
         if pattern.endswith(".*"):
-            return topic.startswith(pattern[:-2])
+            return topic.startswith(pattern[:-1])
         return False
 
     def _inject_correlation_id(self, payload: Any, correlation_id: str) -> Any:
