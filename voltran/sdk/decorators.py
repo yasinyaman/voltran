@@ -331,7 +331,8 @@ def require_permission(
                 )
             
             context = self._voltran_context
-            if not hasattr(context, "authorization"):
+            auth_service = context.authorization
+            if not auth_service:
                 # Authorization not enabled, allow
                 return await func(self, *args, **kwargs)
             
@@ -344,7 +345,6 @@ def require_permission(
                 )
             
             # Check permission
-            auth_service = context.authorization
             has_perm = await auth_service.has_permission(
                 subject_id=subject_id,
                 permission=permission,
@@ -398,7 +398,8 @@ def require_role(
                 )
             
             context = self._voltran_context
-            if not hasattr(context, "authorization"):
+            auth_service = context.authorization
+            if not auth_service:
                 # Authorization not enabled, allow
                 return await func(self, *args, **kwargs)
             
@@ -411,7 +412,6 @@ def require_role(
                 )
             
             # Check role
-            auth_service = context.authorization
             has_role = await auth_service.has_role(
                 subject_id=subject_id,
                 role_name=role,
@@ -429,4 +429,3 @@ def require_role(
         return wrapper  # type: ignore
 
     return decorator
-

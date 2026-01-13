@@ -42,7 +42,7 @@ class GrpcMessagingAdapter(IMessagingPort):
         
         # In-memory message handling for now
         # In real implementation, this would use grpc channels
-        self._subscriptions: dict[str, MessageHandler] = {}
+        self._subscriptions: dict[str, tuple[str, MessageHandler]] = {}
         self._pending_requests: dict[str, asyncio.Future[Any]] = {}
         self._message_queue: asyncio.Queue[Message] = asyncio.Queue()
         self._processor_task: Optional[asyncio.Task[None]] = None
@@ -118,7 +118,7 @@ class GrpcMessagingAdapter(IMessagingPort):
     async def subscribe(self, topic: str, handler: MessageHandler) -> str:
         """Subscribe to topic."""
         subscription_id = f"sub-{uuid4()}"
-        self._subscriptions[subscription_id] = handler
+        self._subscriptions[subscription_id] = (topic, handler)
 
         logger.info(
             "grpc_subscribed",
@@ -201,7 +201,9 @@ class GrpcMessagingAdapter(IMessagingPort):
                     continue
 
                 # Dispatch to subscribers
-                for handler in self._subscriptions.values():
+                for subscription_topic, handler in self._subscriptions.values():
+                    if not self._topic_matches(subscription_topic, message.topic):
+                        continue
                     try:
                         await handler(message)
                     except Exception as e:
@@ -209,6 +211,7 @@ class GrpcMessagingAdapter(IMessagingPort):
                             "grpc_handler_error",
                             error=str(e),
                             topic=message.topic,
+                            subscription_topic=subscription_topic,
                         )
 
             except asyncio.CancelledError:
@@ -216,3 +219,10 @@ class GrpcMessagingAdapter(IMessagingPort):
             except Exception as e:
                 logger.error("grpc_processor_error", error=str(e))
 
+    def _topic_matches(self, pattern: str, topic: str) -> bool:
+        """Check if a subscription pattern matches a topic."""
+        if pattern == topic:
+            return True
+        if pattern.endswith(".*"):
+            return topic.startswith(pattern[:-2])
+        return False

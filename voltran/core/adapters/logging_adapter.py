@@ -82,6 +82,21 @@ class InMemoryLoggingAdapter(ILoggingPort):
         entry.voltran_id = entry.voltran_id or self._voltran_id
         entry.service_name = entry.service_name or self._service_name
         
+        # Evict oldest entry if at capacity
+        if self._logs.maxlen is not None and len(self._logs) >= self._logs.maxlen:
+            dropped = self._logs.popleft()
+            self._logs_by_id.pop(dropped.id, None)
+            if dropped.level.value in self._counts_by_level:
+                self._counts_by_level[dropped.level.value] = max(
+                    0, self._counts_by_level[dropped.level.value] - 1
+                )
+            if dropped.service_name:
+                remaining = self._counts_by_service.get(dropped.service_name, 0) - 1
+                if remaining > 0:
+                    self._counts_by_service[dropped.service_name] = remaining
+                elif dropped.service_name in self._counts_by_service:
+                    del self._counts_by_service[dropped.service_name]
+
         # Store log
         self._logs.append(entry)
         self._logs_by_id[entry.id] = entry
@@ -544,4 +559,3 @@ class FileLoggingAdapter(InMemoryLoggingAdapter):
                 await self.flush()
             except Exception:
                 pass
-

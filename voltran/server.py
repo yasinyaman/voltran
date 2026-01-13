@@ -732,9 +732,23 @@ class Voltran:
             
             health = HealthStatus.UNKNOWN
             if hasattr(instance, "health_check"):
-                health = await instance.health_check()
-            elif hasattr(instance, "health"):
+                try:
+                    result = await instance.health_check()
+                    if isinstance(result, HealthStatus):
+                        health = result
+                    elif hasattr(instance, "health") and isinstance(instance.health, HealthStatus):
+                        health = instance.health
+                    elif isinstance(descriptor.health, HealthStatus):
+                        health = descriptor.health
+                except Exception:
+                    if hasattr(instance, "health") and isinstance(instance.health, HealthStatus):
+                        health = instance.health
+                    elif isinstance(descriptor.health, HealthStatus):
+                        health = descriptor.health
+            elif hasattr(instance, "health") and isinstance(instance.health, HealthStatus):
                 health = instance.health
+            elif isinstance(descriptor.health, HealthStatus):
+                health = descriptor.health
             
             modules_health.append({
                 "id": descriptor.id,
@@ -963,4 +977,3 @@ class Voltran:
             return await self._logging.export_jsonl(query)
         else:
             return await self._logging.export_json(query)
-

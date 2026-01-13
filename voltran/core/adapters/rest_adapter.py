@@ -64,6 +64,7 @@ class RestMessagingAdapter(IMessagingPort):
         
         # Pending requests
         self._pending_requests: dict[str, asyncio.Future[Any]] = {}
+        self._pending_responses: dict[str, Any] = {}
         
         # Known peers (voltran_id -> base_url)
         self._peers: dict[str, str] = {}
@@ -267,7 +268,8 @@ class RestMessagingAdapter(IMessagingPort):
         """Send response to request (handled in request handler)."""
         # For REST, responses are returned directly from the request handler
         # This method is for compatibility with the interface
-        pass
+        if original_message.correlation_id:
+            self._pending_responses[original_message.correlation_id] = response
 
     # === HTTP Server Routes ===
 
@@ -349,18 +351,26 @@ class RestMessagingAdapter(IMessagingPort):
             # Find handler for this request
             topic = message.topic
             response_payload: Any = None
+            self._pending_responses.pop(message.correlation_id, None)
             
             # Deliver to handlers and collect response
             if topic in self._topic_handlers:
                 for handler in self._topic_handlers[topic]:
                     try:
-                        await handler(message)
-                        # For request-response, we expect handler to set response
+                        handler_result = await handler(message)
+                        if handler_result is not None and response_payload is None:
+                            response_payload = handler_result
+                        pending = self._pending_responses.pop(
+                            message.correlation_id, None
+                        )
+                        if pending is not None:
+                            response_payload = pending
+                            break
                     except Exception as e:
                         logger.error("request_handler_error", error=str(e))
             
             # Generic request handling
-            if message.payload.get("action") == "get_modules":
+            if response_payload is None and message.payload.get("action") == "get_modules":
                 # Return modules (to be implemented with discovery integration)
                 response_payload = {"modules": []}
             
@@ -558,6 +568,5 @@ class RestMessagingAdapter(IMessagingPort):
             correlation_id=data.get("correlation_id", ""),
             reply_to=data.get("reply_to"),
         )
-
 
 

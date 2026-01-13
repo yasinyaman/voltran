@@ -148,6 +148,8 @@ class NatsMessagingAdapter(IMessagingPort):
         async def message_handler(msg: Any) -> None:
             try:
                 message = self._deserialize(msg.data)
+                if msg.reply:
+                    message.reply_to = msg.reply
                 await handler(message)
             except Exception as e:
                 logger.error(
@@ -282,4 +284,3 @@ class NatsMessagingAdapter(IMessagingPort):
             correlation_id=obj.get("correlation_id", ""),
             reply_to=obj.get("reply_to"),
         )
-
